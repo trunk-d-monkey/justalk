@@ -1,3 +1,6 @@
+   NOTE: This does NOT yet include audio and video calls as well as reactions.  It will be added and the updated
+   script uploaded. 
+   
    This application will parse the conversations from the JusTalk app
    (tested on iOS) into an SQLite database for analysis. This was working on version 8.9.44 for iOS
    which was out around early 2026.  The app looks to be updated to work with multiple party
