@@ -224,88 +224,140 @@ def elements_process(ld_json, ls_output, ls_e_return):
 	
 	# -- PARTICIPANT NAMES
 	l_query = '''
-CREATE TEMP TABLE IF NOT EXISTS CONTACTS AS
-SELECT DISTINCT 
-ServerFriend.uid AS UID, ServerFriend.name AS NAME,
-ServerFriend.justalkId AS JUSTALK_ID, ServerFriend.nickName AS NICKNAME,
-"(" || (CASE WHEN ServerFriend.name IS NOT NULL THEN "Name: " || ServerFriend.name || ", " ELSE "" END) || 
-(CASE WHEN ServerFriend.justalkId IS NOT NULL THEN "ID: " || ServerFriend.justalkId || ", " ELSE "" END) ||
-(CASE WHEN ServerFriend.nickName IS NOT NULL THEN "Nickname: " || ServerFriend.nickName || ")" ELSE ")" END) 
-AS CONTACT_INFO
-FROM ServerFriend'''
+	CREATE TEMP TABLE IF NOT EXISTS CONTACTS AS
+	SELECT DISTINCT 
+	ServerFriend.uid AS UID, ServerFriend.name AS NAME,
+	ServerFriend.justalkId AS JUSTALK_ID, ServerFriend.nickName AS NICKNAME,
+	"(" || (CASE WHEN ServerFriend.name IS NOT NULL THEN "Name: " || ServerFriend.name || ", " ELSE "" END) || 
+	(CASE WHEN ServerFriend.justalkId IS NOT NULL THEN "ID: " || ServerFriend.justalkId || ", " ELSE "" END) ||
+	(CASE WHEN ServerFriend.nickName IS NOT NULL THEN "Nickname: " || ServerFriend.nickName || ")" ELSE ")" END) 
+	AS CONTACT_INFO
+	FROM ServerFriend'''
 
 	sql_cur.execute(l_query)
 	
 	# -- ACCOUNT USER_TEMP
 	l_query = '''
-CREATE TEMP TABLE IF NOT EXISTS AU_S1 AS
-SELECT DISTINCT
-GROUP_CONCAT(DISTINCT CallLog.senderName) AS DEVICE_USER,
-CASE CallLog.incoming
-   WHEN 1 THEN 'INCOMING'
-   WHEN 0 THEN 'OUTGOING'
-END AS DIRECTION
-FROM CallLog 
-WHERE CallLog.senderName IS NOT NULL
-AND CallLog.incoming = 0
-GROUP BY callLog.senderName'''
+	CREATE TEMP TABLE IF NOT EXISTS AU_S1 AS
+	SELECT DISTINCT
+	GROUP_CONCAT(DISTINCT CallLog.senderName) AS DEVICE_USER,
+	CASE CallLog.incoming
+	   WHEN 1 THEN 'INCOMING'
+	   WHEN 0 THEN 'OUTGOING'
+	END AS DIRECTION
+	FROM CallLog 
+	WHERE CallLog.senderName IS NOT NULL
+	AND CallLog.incoming = 0
+	GROUP BY callLog.senderName'''
 	
 	sql_cur.execute(l_query)
 
 	# -- ACCOUNT USER
 	l_query = '''
-CREATE TEMP TABLE IF NOT EXISTS ACCOUNT_USER AS
-SELECT AU_S1.DEVICE_USER, AU_S1.DIRECTION, CONTACTS.CONTACT_INFO
-FROM AU_S1
-LEFT JOIN CONTACTS ON AU_S1.DEVICE_USER LIKE CONTACTS.NICKNAME'''
+	CREATE TEMP TABLE IF NOT EXISTS ACCOUNT_USER AS
+	SELECT AU_S1.DEVICE_USER, AU_S1.DIRECTION, CONTACTS.CONTACT_INFO
+	FROM AU_S1
+	LEFT JOIN CONTACTS ON AU_S1.DEVICE_USER LIKE CONTACTS.NICKNAME'''
 
 	sql_cur.execute(l_query)
 	
+	# CallLog.type 
+	# 0 = Audio, 1 = Video, 2 = Text, 17 = Sticker
+	# 6 = Image, 18 = GIF, 15 = Audio File, 21 = Emoji
+	# 200 = JusTalk sales, 19 = Doodle, 7 = Automated message
+	
+	# 14 = Unknown EX: {"MtcImMsgIdKey":741,"MtcImImdnIdKey":"3761ED52-5F86-498F-B52C-197F5C04767D"}
+	# 3000 = Unknown
 	
 	# -- MATCH THE MESSAGES TO THE ACCOUNT_USER AND CONTACTS
 	l_query = '''
-CREATE TABLE IF NOT EXISTS A_MESSAGES_DATA AS
-SELECT
-CallLog.ROWID AS R_ID,
-CallLog.uid AS CONVERSATION_UID,
-CASE CallLog.incoming
-   WHEN 1 THEN 'INCOMING'
-   WHEN 0 THEN 'OUTGOING'
-END AS DIRECTION,
-CallLog.senderUid || " " || SENDERS.CONTACT_INFO AS SENDER_UID_INFO,
-datetime(CallLog.timestamp/1000,'unixepoch') AS TIMESTAMP_UTC,
-CASE 
-	WHEN CallLog.senderName IS NOT NULL
-		THEN CallLog.senderName
-	ELSE "(NULL_SYSTEM)"
-END SENDER,
-CASE CallLog.incoming
-	WHEN 1 THEN "FROM: " || CONTACTS.CONTACT_INFO
-	WHEN 0 THEN "TO: " || CONTACTS.CONTACT_INFO
-END AS CONTACT_DATA,
-CallLog.content AS CONTENT,
-CAST(NULL AS BLOB) AS CACHE_FILE_BLOB_DATA,
-CAST(NULL AS BLOB) AS CACHE_THUMB_BLOB_DATA,
-CAST(NULL AS TEXT) AS CACHE_FILE_NAME,
-CAST(NULL AS TEXT) AS CACHE_FILE_MD5,
-CAST(NULL AS TEXT) AS CACHE_THUMB_NAME
-FROM CallLog
-LEFT JOIN ACCOUNT_USER
-ON ACCOUNT_USER.DIRECTION = DIRECTION 
-AND ACCOUNT_USER.DEVICE_USER = CallLog.senderName
-LEFT JOIN CONTACTS
-ON CONTACTS.UID = CallLog.uid
-LEFT JOIN CONTACTS AS SENDERS
-ON SENDERS.UID = CallLog.senderUid
-ORDER BY TIMESTAMP_UTC'''
+	CREATE TABLE IF NOT EXISTS A_MESSAGES_DATA AS
+	SELECT
+	CallLog.ROWID AS R_ID,
+	CallLog.uid AS CONVERSATION_UID,
+	CallLog.callId AS CALL_ID,
+	CASE 
+	   WHEN CallLog.startTime IS NOT 0 AND CallLog.startTime IS NOT NULL
+		  THEN datetime(CallLog.startTime,'unixepoch')
+	   ELSE CallLog.startTime
+	END AS START_UTC,
+	CASE 
+	   WHEN CallLog.endTime IS NOT 0 and CallLog.endTime IS NOT NULL
+		  THEN datetime(CallLog.endTime,'unixepoch')
+		  ELSE CallLog.endTime
+	END AS END_UTC,
+	CallLog.type AS TYPE_CODE,
+	CASE CallLog.type
+	   WHEN 0 THEN 'Audio Call'
+	   WHEN 1 THEN 'Video Call'
+	   WHEN 2 THEN 'Text Message'
+	   WHEN 15 THEN 'Audio File'
+	   WHEN 6 THEN 'Image'
+	   WHEN 21 THEN 'Emoji'
+	   WHEN 18 THEN 'GIF'
+	   WHEN 17 THEN 'Sticker'
+	   WHEN 19 THEN 'Doodle'
+	   WHEN 200 THEN 'JusTalk Sales'
+	   WHEN 7 THEN 'Automated Message'
+	   ELSE CallLog.type
+	END AS TYPE,
+	CASE CallLog.incoming
+	   WHEN 1 THEN 'INCOMING'
+	   WHEN 0 THEN 'OUTGOING'
+	END AS DIRECTION,
+	CallLog.senderUid || " " || SENDERS.CONTACT_INFO AS SENDER_UID_INFO,
+	datetime(CallLog.timestamp/1000,'unixepoch') AS TIMESTAMP_UTC,
+	CASE 
+		WHEN CallLog.senderName IS NOT NULL
+			THEN CallLog.senderName
+		ELSE "(NULL_SYSTEM)"
+	END SENDER,
+	CASE CallLog.incoming
+		WHEN 1 THEN "FROM: " || CONTACTS.CONTACT_INFO
+		WHEN 0 THEN "TO: " || CONTACTS.CONTACT_INFO
+	END AS CONTACT_DATA,
+	CASE 
+	   WHEN CallLog.type = 2 THEN CallLog.content
+	   WHEN CallLog.type = 6 THEN 'IMAGE: ' || CallLog.content
+	   WHEN CallLog.type = 7 THEN 'AUTOMATED MESSAGE: ' || CallLog.content
+	   WHEN CallLog.type = 1 THEN 'VIDEO CALL: ' || time(CallLog.endTime - CallLog.startTime, 'unixepoch') 
+	   WHEN CallLog.type = 0 THEN 'AUDIO CALL: ' || time(CallLog.endTime - CallLog.startTime, 'unixepoch') 
+	   WHEN CallLog.type = 18 THEN 'GIF: ' || CallLog.content
+	   WHEN CallLog.type = 15 THEN 'AUDIO FILE: ' || CallLog.content
+	   WHEN CallLog.type = 19 THEN 'DOODLE: ' || CallLog.content
+	   WHEN CallLog.type = 17 THEN 'STICKER: ' || CallLog.content
+	   WHEN CallLog.type = 21 THEN 'EMOJI: ' || CallLog.content
+	   WHEN CallLog.type = 200 THEN 'JUSTALK SALES: ' || CallLog.content
+	   ELSE CallLog.content
+	END AS CONTENT,
+
+	CAST(NULL AS BLOB) AS CACHE_FILE_BLOB_DATA,
+	CAST(NULL AS BLOB) AS CACHE_THUMB_BLOB_DATA,
+	CAST(NULL AS TEXT) AS CACHE_FILE_NAME,
+	CAST(NULL AS TEXT) AS CACHE_FILE_MD5,
+	CAST(NULL AS TEXT) AS CACHE_THUMB_NAME,
+	CallLog.imdnId AS IMDN_ID,
+	CallLog.userData AS USER_DATA, CallLog.repliedImdnId AS REPLIED_IMDN_ID,
+	CallLog.repliedLog AS REPLIED_LOG, CallLog.replyCount AS REPLY_COUNT,
+	CallLog.reactedImdnId AS REACTED_IMDN_ID, CallLog.reactLogs AS REACT_LOGS,
+	CallLog.content AS CONTENT_ORIGINAL
+	FROM CallLog
+	LEFT JOIN ACCOUNT_USER
+	ON ACCOUNT_USER.DIRECTION = DIRECTION 
+	AND ACCOUNT_USER.DEVICE_USER = CallLog.senderName
+	LEFT JOIN CONTACTS
+	ON CONTACTS.UID = CallLog.uid
+	LEFT JOIN CONTACTS AS SENDERS
+	ON SENDERS.UID = CallLog.senderUid
+	ORDER BY TIMESTAMP_UTC'''	
 
 	sql_cur.execute(l_query)
 	
 	# Now query and roll through content with attachments in A_MESSAGES_DATA
 	l_query = '''
-SELECT R_ID, CONTENT,CACHE_FILE_NAME, CACHE_FILE_MD5, CACHE_FILE_BLOB_DATA,
-CACHE_THUMB_NAME, CACHE_THUMB_BLOB_DATA
-FROM A_MESSAGES_DATA ORDER BY R_ID'''
+	SELECT R_ID, CONTENT_ORIGINAL,CACHE_FILE_NAME, CACHE_FILE_MD5, CACHE_FILE_BLOB_DATA,
+	CACHE_THUMB_NAME, CACHE_THUMB_BLOB_DATA
+	FROM A_MESSAGES_DATA ORDER BY R_ID'''
 	
 	sql_cur.execute(l_query)
 	
@@ -314,60 +366,76 @@ FROM A_MESSAGES_DATA ORDER BY R_ID'''
 	
 	# Cycle through all the records populating BLOBs where needed. 
 	for row in l_records:
+		# Pre assign in case contents are NOT json but contain "md5"
+		# May be redundent but here for insurance.
+		l_md5 = None
+		l_cache_fn = None
+		l_cache_fn_data = None
+		l_thumbnail_fn = None
+		l_thumb_data = None
+		l_rid = None
+		
+		lb_error = False # Error to set if JSON decoding error
+		
 		l_rid = row['R_ID']
-		l_content = row['CONTENT']
+		l_content = row['CONTENT_ORIGINAL']
 		if l_content != None:
 			# Get the file attachment information (base64 of the BINARY MD5)
 			# The programmers for some reason are storing the cache file name, not by the file name
 			# but the binary MD5... yep, the hexidecimal in BINARY which is THEN encoded base64
 			# and stored in the content.  
 			if 'md5' in l_content:
-				l_json = json.loads(l_content)
-				l_b64md5 = l_json.get('md5')
-				if l_b64md5 != None:
-					l_md5 = base64.b64decode(l_b64md5).hex() # Get the printable hex from bytes
-					lt = d_hashes.get(l_md5) # Get the cache file name list
-					l_cache_fn = lt[1] # File NAME for storage
-					l_cache_fp = lt[0] # File FULL PATH for Binary import
-					
-					# Get the file DATA
-					x = open(l_cache_fp, 'rb') # Open the file
-					l_cache_fn_data = x.read() # Read the data
-					x.close() # Close the file
-					del x
+				try: # Here because if the contents are NOT JSON, the json.loads() will error.  It will skip this section.
+					l_json = json.loads(l_content)
+					l_b64md5 = l_json.get('md5')
+					if l_b64md5 != None:
+						l_md5 = base64.b64decode(l_b64md5).hex() # Get the printable hex from bytes
+						lt = d_hashes.get(l_md5) # Get the cache file name list
+						l_cache_fn = lt[1] # File NAME for storage
+						l_cache_fp = lt[0] # File FULL PATH for Binary import
+						
+						# Get the file DATA
+						x = open(l_cache_fp, 'rb') # Open the file
+						l_cache_fn_data = x.read() # Read the data
+						x.close() # Close the file
+						del x
 
-				# Get the thumbnail if there is one
-				l_thumbnail_fn = l_json.get('localThumbnail')
+					# Get the thumbnail if there is one
+					l_thumbnail_fn = l_json.get('localThumbnail')
 
-				if l_thumbnail_fn != None:
-					l_thumb_path = d_files.get(l_thumbnail_fn) # Get the full path of the thumbnail
+					if l_thumbnail_fn != None:
+						l_thumb_path = d_files.get(l_thumbnail_fn) # Get the full path of the thumbnail
+						
+						# Get the data from the thumbnail file
+						x = open(l_thumb_path, 'rb')
+						l_thumb_data = x.read()
+						x.close()
+						del x
+					lb_error = False
 					
-					# Get the data from the thumbnail file
-					x = open(l_thumb_path, 'rb')
-					l_thumb_data = x.read()
-					x.close()
-					del x
-							
-				l_query = f'''
-UPDATE A_MESSAGES_DATA SET
-CACHE_FILE_MD5 = "{l_md5}",
-CACHE_FILE_NAME = "{l_cache_fn}",
---CACHE_FILE_BLOB_DATA = {l_cache_fn_data},
-CACHE_THUMB_NAME = "{l_thumbnail_fn}"
---CACHE_THUMB_BLOB_DATA = {l_thumb_data}
-WHERE R_ID = "{l_rid}"
-				'''
-				sql_cur.execute(l_query)
+				except:
+					lb_error = True
+				
+				# Input the data IF there is not a JSON error
+				if lb_error == False:				
+					l_query = f'''
+					UPDATE A_MESSAGES_DATA SET
+					CACHE_FILE_MD5 = "{l_md5}",
+					CACHE_FILE_NAME = "{l_cache_fn}",
+					CACHE_THUMB_NAME = "{l_thumbnail_fn}"
+					WHERE R_ID = "{l_rid}"'''
+
+					sql_cur.execute(l_query)
 				
 				# Add the BLOBs.  Has to be done with placeholders.
 				# Need ALL placeholders or ALL variable insterts like above
-				l_input_data = (l_cache_fn_data, l_thumb_data, l_rid)
+					l_input_data = (l_cache_fn_data, l_thumb_data, l_rid)
 				
-				l_query = f'''
-UPDATE A_MESSAGES_DATA SET CACHE_FILE_BLOB_DATA = ?,
-CACHE_THUMB_BLOB_DATA = ? WHERE R_ID = ?'''
+					l_query = f'''
+					UPDATE A_MESSAGES_DATA SET CACHE_FILE_BLOB_DATA = ?,
+					CACHE_THUMB_BLOB_DATA = ? WHERE R_ID = ?'''
 				
-				sql_cur.execute(l_query, l_input_data)
+					sql_cur.execute(l_query, l_input_data)
 				
 		# Clear the variables for the next round.  If we don't do this
 		# You'll have stuff put in the wrong places
